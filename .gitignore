@@ -1,0 +1,8 @@
+*.pkl
+*.zip
+__pycache__
+*.pkl
+*.zip
+*.mp4
+*.pptx
+__pycache__/
