@@ -12,7 +12,8 @@ from sklearn.discriminant_analysis import (
     QuadraticDiscriminantAnalysis,
 )
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.svm import SVC
+from sklearn.svm import SVC, LinearSVC
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     balanced_accuracy_score,
@@ -73,20 +74,20 @@ _MODEL_CONFIGS = {
 
 _EXTRA_LEARNERS = {
     "RF": lambda: RandomForestClassifier(
-        n_estimators=500, class_weight="balanced", random_state=_RANDOM_STATE
+        n_estimators=100, class_weight="balanced", random_state=_RANDOM_STATE
     ),
     "meta_LR": lambda: LogisticRegression(
         max_iter=1000, class_weight="balanced", random_state=_RANDOM_STATE
     ),
     "meta_PCA+SVM": lambda: Pipeline([
         ("pca", PCA(n_components=0.95, random_state=_RANDOM_STATE)),
-        ("svm", SVC(kernel="rbf", C=1.0, class_weight="balanced",
-                    probability=False, random_state=_RANDOM_STATE)),
+        ("svm", LinearSVC(C=1.0, class_weight="balanced", max_iter=2000,
+                          random_state=_RANDOM_STATE)),
     ]),
     "meta_PCA+RF": lambda: Pipeline([
         ("pca", PCA(n_components=0.95, random_state=_RANDOM_STATE)),
         ("rf",  RandomForestClassifier(
-            n_estimators=500, class_weight="balanced", random_state=_RANDOM_STATE
+            n_estimators=100, class_weight="balanced", random_state=_RANDOM_STATE
         )),
     ]),
     "meta_PCA+LR": lambda: Pipeline([
@@ -187,12 +188,12 @@ def _build_pipeline(model_name: str, n_comp, params: dict, rng: int):
         clf = LogisticRegression(random_state=rng, **params)
     elif base_name == "SVM":
         p = {k: v for k, v in params.items() if k != "gamma"}
-        gamma = params.get("gamma", "scale")
-        try:
-            gamma = float(gamma)
-        except (ValueError, TypeError):
-            pass
-        clf = SVC(gamma=gamma, probability=True, random_state=rng, **p)
+        # Replace kernel SVC (O(n²) memory) with calibrated LinearSVC
+        clf = CalibratedClassifierCV(
+            LinearSVC(C=float(p.get("C", 1.0)), class_weight="balanced",
+                      max_iter=2000, random_state=rng),
+            cv=3, method="sigmoid"
+        )
     elif base_name == "LDA":
         clf = LinearDiscriminantAnalysis(**params)
     elif base_name == "QDA":
@@ -207,6 +208,64 @@ def _build_pipeline(model_name: str, n_comp, params: dict, rng: int):
     return Pipeline(steps)
 
 
+@st.cache_data(show_spinner="Training base models and building meta-features…")
+def _run_base_pipeline(X_train, y_train, X_test, y_all, train_idx_arr, work_dir):
+    """Train base models, assemble OOF meta-features, scale. Cached per data split."""
+    trained_info = {}   # model_name → {"n_comp", "params", "proba_test"}
+    model_missing = []
+
+    for model_name, cfg in _MODEL_CONFIGS.items():
+        feat_csv = os.path.join(work_dir, cfg["feat_csv"])
+        if not os.path.isfile(feat_csv):
+            model_missing.append(model_name)
+            continue
+        raw_params = _read_best_params(feat_csv, cfg["hp_cols"])
+        n_comp     = raw_params.pop("n_components", None)
+        params     = _cast_params(model_name, raw_params)
+        pipe = _build_pipeline(model_name, n_comp, params, _RANDOM_STATE)
+        pipe.fit(X_train, y_train)
+        proba = pipe.predict_proba(X_test)
+        trained_info[model_name] = {"n_comp": n_comp, "params": params, "proba_test": proba}
+
+    train_idx_set = set(train_idx_arr.tolist())
+    oof_blocks = []
+    test_blocks_filtered = []
+    sorted_train_indices = None
+
+    for model_name, cfg in _MODEL_CONFIGS.items():
+        if model_name not in trained_info:
+            continue
+        prob_csv = os.path.join(work_dir, cfg["prob_csv"])
+        if not os.path.isfile(prob_csv):
+            continue
+        df_oof   = pd.read_csv(prob_csv)
+        df_train = df_oof[df_oof["sample_idx"].isin(train_idx_set)].copy()
+        df_train = df_train.sort_values("sample_idx").reset_index(drop=True)
+        prob_cols = [c for c in df_train.columns if c.startswith("prob_")]
+        if sorted_train_indices is None:
+            sorted_train_indices = df_train["sample_idx"].values.astype(int)
+        oof_blocks.append(df_train[prob_cols].values.astype(float))
+        test_blocks_filtered.append(trained_info[model_name]["proba_test"])
+
+    if not oof_blocks:
+        return None
+
+    meta_X_train    = np.hstack(oof_blocks)
+    meta_X_test     = np.hstack(test_blocks_filtered)
+    y_meta_train    = y_all[sorted_train_indices]
+
+    meta_scaler      = StandardScaler()
+    meta_X_train_sc  = meta_scaler.fit_transform(meta_X_train)
+    meta_X_test_sc   = meta_scaler.transform(meta_X_test)
+
+    trained_params_display = {
+        m: {"n_comp": info["n_comp"], "params": info["params"]}
+        for m, info in trained_info.items()
+    }
+    return (meta_X_train_sc, meta_X_test_sc, y_meta_train,
+            model_missing, trained_params_display)
+
+
 st.title("Stacking Ensemble — Full Training Pipeline")
 
 # ── Dataset input: file uploader (cloud) or local path (local) ──
@@ -219,11 +278,11 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("**SVM meta-learner grid**")
 svm_kernels = st.sidebar.multiselect(
     "Kernels", ["rbf", "linear", "poly", "sigmoid"],
-    default=["rbf", "linear", "poly"]
+    default=["linear"]
 )
 svm_cs = st.sidebar.multiselect(
     "C values", [0.01, 0.1, 1.0, 10.0, 100.0],
-    default=[0.1, 1.0, 10.0]
+    default=[0.1, 1.0]
 )
 
 st.subheader("Step 1 — Load data and split")
@@ -261,93 +320,24 @@ st.success(
     f"Classes: **{n_classes}**"
 )
 
-st.subheader("Step 2 — Train base models and collect test probabilities")
-meta_X_test_blocks = []
-trained_models     = {}
-base_col  = st.columns(min(len(_MODEL_CONFIGS), 4))
-col_idx   = 0
-model_missing = []
+st.subheader("Steps 2–4 — Train base models, assemble OOF meta-features, scale")
 
-for model_name, cfg in _MODEL_CONFIGS.items():
-    feat_csv = os.path.join(_WORK_DIR, cfg["feat_csv"])
-    if not os.path.isfile(feat_csv):
-        model_missing.append(model_name)
-        continue
+pipeline_result = _run_base_pipeline(
+    X_train, y_train, X_test, y_all, train_idx, _WORK_DIR
+)
+if pipeline_result is None:
+    st.error("No OOF CSVs found. Cannot build meta_X_train.")
+    st.stop()
 
-    raw_params = _read_best_params(feat_csv, cfg["hp_cols"])
-    n_comp     = raw_params.pop("n_components", None)
-    params     = _cast_params(model_name, raw_params)
-
-    pipe = _build_pipeline(model_name, n_comp, params, _RANDOM_STATE)
-
-    with base_col[col_idx % len(base_col)]:
-        with st.spinner(f"Training {model_name}..."):
-            pipe.fit(X_train, y_train)
-            proba = pipe.predict_proba(X_test)
-
-    trained_models[model_name]  = (pipe, n_comp, params)
-    meta_X_test_blocks.append(proba)
-    col_idx += 1
+meta_X_train_sc, meta_X_test_sc, y_meta_train, model_missing, trained_models_display = pipeline_result
 
 if model_missing:
     st.warning(f"Missing feature CSVs for: {model_missing}. Skipped.")
 
-st.subheader("Step 3 — Assemble OOF meta-train features")
-oof_blocks     = []
-test_blocks_filtered = []
-sorted_train_indices = None
-
-for model_name, cfg in _MODEL_CONFIGS.items():
-    if model_name not in trained_models:
-        continue
-    prob_csv = os.path.join(_WORK_DIR, cfg["prob_csv"])
-    if not os.path.isfile(prob_csv):
-        st.warning(f"OOF CSV not found: {cfg['prob_csv']}. Skipping {model_name}.")
-        continue
-
-    df_oof    = pd.read_csv(prob_csv)
-    df_train  = df_oof[df_oof["sample_idx"].isin(train_idx_set)].copy()
-    df_train  = df_train.sort_values("sample_idx").reset_index(drop=True)
-    prob_cols = [c for c in df_train.columns if c.startswith("prob_")]
-
-    if sorted_train_indices is None:
-        sorted_train_indices = df_train["sample_idx"].values.astype(int)
-
-    oof_blocks.append(df_train[prob_cols].values.astype(float))
-    # Keep only test blocks for models that also have OOF CSVs
-    model_list = list(_MODEL_CONFIGS.keys())
-    model_idx  = [i for i, m in enumerate(model_list) if m in trained_models]
-    oof_model_order = [m for m in model_list if m in trained_models and
-                       os.path.isfile(os.path.join(_WORK_DIR, _MODEL_CONFIGS[m]["prob_csv"]))]
-
-# Rebuild meta_X_test using only models that contributed to oof_blocks
-test_blocks_filtered = []
-for model_name in _MODEL_CONFIGS:
-    if model_name not in trained_models:
-        continue
-    prob_csv = os.path.join(_WORK_DIR, _MODEL_CONFIGS[model_name]["prob_csv"])
-    if not os.path.isfile(prob_csv):
-        continue
-    pipe, _, _ = trained_models[model_name]
-    test_blocks_filtered.append(pipe.predict_proba(X_test))
-
-if not oof_blocks:
-    st.error("No OOF CSVs found. Cannot build meta_X_train.")
-    st.stop()
-
-meta_X_train    = np.hstack(oof_blocks)
-meta_X_test     = np.hstack(test_blocks_filtered)
-y_meta_train    = y_all[sorted_train_indices]
-
 st.success(
-    f"meta_X_train shape: **{meta_X_train.shape}**  |  "
-    f"meta_X_test shape: **{meta_X_test.shape}**"
+    f"meta_X_train shape: **{meta_X_train_sc.shape}**  |  "
+    f"meta_X_test shape: **{meta_X_test_sc.shape}**"
 )
-
-st.subheader("Step 4 — Scale meta-features")
-meta_scaler      = StandardScaler()
-meta_X_train_sc  = meta_scaler.fit_transform(meta_X_train)
-meta_X_test_sc   = meta_scaler.transform(meta_X_test)
 
 if use_smote:
     with st.spinner("Applying SMOTE..."):
@@ -485,11 +475,11 @@ for r in all_results:
 
 with st.expander("Best hyperparameters used per base model"):
     hp_rows = []
-    for model_name, (pipe, n_comp, params) in trained_models.items():
+    for model_name, info in trained_models_display.items():
         row = {"Model": model_name}
-        if n_comp is not None:
-            row["n_components"] = n_comp
-        row.update(params)
+        if info["n_comp"] is not None:
+            row["n_components"] = info["n_comp"]
+        row.update(info["params"])
         hp_rows.append(row)
     if hp_rows:
         st.dataframe(pd.DataFrame(hp_rows).set_index("Model"), width="stretch")
