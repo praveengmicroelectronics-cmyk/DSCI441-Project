@@ -84,7 +84,8 @@ from top_features import select_top_features, select_top_features_pca_lda
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-_DEFAULT_PATH = os.path.expanduser("~/Documents/DSCI441/LSWMD.pkl")
+_WORK_DIR     = os.path.dirname(os.path.abspath(__file__))
+_DEFAULT_PATH = os.path.join(_WORK_DIR, "LSWMD_labeled.pkl")
 
 _CLASS_ORDER = [
     "Scratch", "Loc", "Near-full", "Edge-Ring",
@@ -732,7 +733,6 @@ use_smote = st.sidebar.checkbox(
 svc_cap = _SVC_MAX_ROWS  # fixed at 3 000; SVC is O(n²–n³)
 
 st.sidebar.markdown("---")
-run_btn = st.sidebar.button("▶  Run All Selected Models", type="primary")
 
 # ---------------------------------------------------------------------------
 # Step 0 – Load & extract
@@ -759,9 +759,6 @@ st.info(
     "All selections fit on the training split only — no data leakage."
 )
 
-if not run_btn:
-    st.info("Configure settings in the sidebar, then click **▶ Run All Selected Models**.")
-    st.stop()
 
 if not selected_models:
     st.warning("No models selected.")
@@ -895,7 +892,7 @@ for model_name in selected_models:
         st.plotly_chart(fig_bv, use_container_width=True)
 
     # CSV filename:  e.g.  SVM_200_features.csv
-    save_dir   = os.path.dirname(dataset_path) if os.path.isabs(dataset_path) else os.getcwd()
+    save_dir   = _WORK_DIR
     csv_name   = f"{model_name.replace('+', '_')}_{n_sample}_features.csv"
     csv_path   = os.path.join(save_dir, csv_name)
     results_df.to_csv(csv_path, index=False)          # ← saved to disk immediately
