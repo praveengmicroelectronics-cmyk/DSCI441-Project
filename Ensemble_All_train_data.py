@@ -29,8 +29,8 @@ from top_features import select_top_features
 
 st.set_page_config(page_title="Stacking Ensemble — SVM Meta-Model", layout="wide")
 
-_DEFAULT_PATH  = os.path.expanduser("~/Documents/DSCI441/LSWMD_labeled.pkl")
 _WORK_DIR      = os.path.dirname(os.path.abspath(__file__))
+_DEFAULT_PATH  = os.path.join(_WORK_DIR, "LSWMD_labeled.pkl")
 _RANDOM_STATE  = 42
 
 _MODEL_CONFIGS = {
