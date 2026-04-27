@@ -226,12 +226,6 @@ svm_cs = st.sidebar.multiselect(
     default=[0.1, 1.0, 10.0]
 )
 
-run_btn = st.sidebar.button("Run Pipeline", type="primary")
-
-if not run_btn:
-    st.info("Configure options in the sidebar and click **Run Pipeline**.")
-    st.stop()
-
 st.subheader("Step 1 — Load data and split")
 with st.spinner("Loading dataset..."):
     if uploaded_pkl is not None:
