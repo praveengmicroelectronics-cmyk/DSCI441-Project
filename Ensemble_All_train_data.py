@@ -101,6 +101,12 @@ _EXTRA_LEARNERS = {
 
 @st.cache_data(show_spinner=False)
 def _load_data(path: str):
+    # Fast path: pre-computed feature cache avoids 30-130s extraction
+    cache_path = os.path.join(_WORK_DIR, "wafer_features_cached.npz")
+    if os.path.isfile(cache_path):
+        d = np.load(cache_path, allow_pickle=True)
+        return (d["X"].astype(float), d["y"].astype(int),
+                list(d["feature_names"].astype(str)), d["y_str"].astype(str))
     df = pd.read_pickle(path)
     return _process_df(df)
 
