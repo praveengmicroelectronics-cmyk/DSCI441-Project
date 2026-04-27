@@ -101,6 +101,17 @@ _EXTRA_LEARNERS = {
 @st.cache_data(show_spinner=False)
 def _load_data(path: str):
     df = pd.read_pickle(path)
+    return _process_df(df)
+
+
+@st.cache_data(show_spinner=False)
+def _load_data_bytes(data: bytes):
+    import io
+    df = pd.read_pickle(io.BytesIO(data))
+    return _process_df(df)
+
+
+def _process_df(df):
     df["failureType"] = df["failureType"].apply(
         lambda x: np.array(x).flatten()[0] if np.array(x).size > 0 else None
     )
@@ -198,7 +209,9 @@ def _build_pipeline(model_name: str, n_comp, params: dict, rng: int):
 
 st.title("Stacking Ensemble — Full Training Pipeline")
 
-data_path = st.sidebar.text_input("Dataset path (.pkl)", value=_DEFAULT_PATH)
+# ── Dataset input: file uploader (cloud) or local path (local) ──
+uploaded_pkl = st.sidebar.file_uploader("Upload LSWMD.pkl", type=["pkl"])
+data_path = st.sidebar.text_input("OR local path (.pkl)", value=_DEFAULT_PATH)
 test_size  = st.sidebar.slider("Test split fraction", 0.1, 0.4, 0.2, 0.05)
 use_smote  = st.sidebar.checkbox("Apply SMOTE to meta-train features", value=False)
 
@@ -221,7 +234,17 @@ if not run_btn:
 
 st.subheader("Step 1 — Load data and split")
 with st.spinner("Loading dataset..."):
-    X_all, y_all_enc, feat_names, y_all_str = _load_data(data_path)
+    if uploaded_pkl is not None:
+        X_all, y_all_enc, feat_names, y_all_str = _load_data_bytes(uploaded_pkl.read())
+    elif os.path.isfile(data_path):
+        X_all, y_all_enc, feat_names, y_all_str = _load_data(data_path)
+    else:
+        st.error(
+            "LSWMD.pkl not found. Please upload the file using the sidebar uploader, "
+            "or provide a valid local path.\n\n"
+            "Download from: https://www.kaggle.com/datasets/qingyi/wm-811k-wafermap"
+        )
+        st.stop()
 
 le        = LabelEncoder().fit(np.unique(y_all_str))
 y_all     = le.transform(y_all_str)
