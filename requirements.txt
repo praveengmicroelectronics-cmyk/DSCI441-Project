@@ -1,0 +1,17 @@
+numpy
+pandas
+scikit-learn
+scipy
+matplotlib
+seaborn
+plotly
+streamlit
+imbalanced-learn
+scikit-image
+scikit-optimize
+statsmodels
+xgboost
+opencv-python
+torch
+torchvision
+timm
