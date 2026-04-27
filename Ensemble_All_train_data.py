@@ -29,7 +29,7 @@ from top_features import select_top_features
 
 st.set_page_config(page_title="Stacking Ensemble — SVM Meta-Model", layout="wide")
 
-_DEFAULT_PATH  = os.path.expanduser("~/Documents/DSCI441/LSWMD.pkl")
+_DEFAULT_PATH  = os.path.expanduser("~/Documents/DSCI441/LSWMD_labeled.pkl")
 _WORK_DIR      = os.path.dirname(os.path.abspath(__file__))
 _RANDOM_STATE  = 42
 
@@ -298,11 +298,9 @@ for model_name, cfg in _MODEL_CONFIGS.items():
 if model_missing:
     st.warning(f"Missing feature CSVs for: {model_missing}. Skipped.")
 
-meta_X_test = np.hstack(meta_X_test_blocks) if meta_X_test_blocks else None
-st.success(f"meta_X_test shape: **{meta_X_test.shape if meta_X_test is not None else 'N/A'}**")
-
 st.subheader("Step 3 — Assemble OOF meta-train features")
 oof_blocks     = []
+test_blocks_filtered = []
 sorted_train_indices = None
 
 for model_name, cfg in _MODEL_CONFIGS.items():
@@ -322,12 +320,29 @@ for model_name, cfg in _MODEL_CONFIGS.items():
         sorted_train_indices = df_train["sample_idx"].values.astype(int)
 
     oof_blocks.append(df_train[prob_cols].values.astype(float))
+    # Keep only test blocks for models that also have OOF CSVs
+    model_list = list(_MODEL_CONFIGS.keys())
+    model_idx  = [i for i, m in enumerate(model_list) if m in trained_models]
+    oof_model_order = [m for m in model_list if m in trained_models and
+                       os.path.isfile(os.path.join(_WORK_DIR, _MODEL_CONFIGS[m]["prob_csv"]))]
+
+# Rebuild meta_X_test using only models that contributed to oof_blocks
+test_blocks_filtered = []
+for model_name in _MODEL_CONFIGS:
+    if model_name not in trained_models:
+        continue
+    prob_csv = os.path.join(_WORK_DIR, _MODEL_CONFIGS[model_name]["prob_csv"])
+    if not os.path.isfile(prob_csv):
+        continue
+    pipe, _, _ = trained_models[model_name]
+    test_blocks_filtered.append(pipe.predict_proba(X_test))
 
 if not oof_blocks:
     st.error("No OOF CSVs found. Cannot build meta_X_train.")
     st.stop()
 
 meta_X_train    = np.hstack(oof_blocks)
+meta_X_test     = np.hstack(test_blocks_filtered)
 y_meta_train    = y_all[sorted_train_indices]
 
 st.success(
