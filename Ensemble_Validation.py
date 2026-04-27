@@ -29,10 +29,10 @@ _META_LEARNERS = {
         max_iter=2000, class_weight="balanced", random_state=42
     ),
     "RF": lambda: RandomForestClassifier(
-        n_estimators=500, class_weight="balanced", random_state=42
+        n_estimators=100, class_weight="balanced", random_state=42, n_jobs=1
     ),
     "GradientBoosting": lambda: GradientBoostingClassifier(
-        n_estimators=200, random_state=42
+        n_estimators=50, random_state=42
     ),
     "SVM": lambda: SVC(
         kernel="rbf", C=1.0, class_weight="balanced",
@@ -127,7 +127,7 @@ status_txt  = st.empty()
 for i, name in enumerate(selected):
     status_txt.text(f"Running {name} ({i + 1}/{len(selected)})...")
     clf  = _META_LEARNERS[name]()
-    pred = cross_val_predict(clf, meta_X, y, cv=skf, n_jobs=-1)
+    pred = cross_val_predict(clf, meta_X, y, cv=skf, n_jobs=1)
 
     clf_full = _META_LEARNERS[name]()
     clf_full.fit(meta_X, y)
