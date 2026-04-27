@@ -11,7 +11,7 @@ from sklearn.discriminant_analysis import (
     QuadraticDiscriminantAnalysis,
 )
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.svm import SVC
+from sklearn.svm import LinearSVC
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
 from sklearn.metrics import (
     balanced_accuracy_score,
@@ -34,9 +34,8 @@ _META_LEARNERS = {
     "GradientBoosting": lambda: GradientBoostingClassifier(
         n_estimators=50, random_state=42
     ),
-    "SVM": lambda: SVC(
-        kernel="rbf", C=1.0, class_weight="balanced",
-        probability=False, random_state=42
+    "SVM": lambda: LinearSVC(
+        C=1.0, class_weight="balanced", max_iter=2000, random_state=42
     ),
     "LDA": lambda: LinearDiscriminantAnalysis(),
     "QDA": lambda: QuadraticDiscriminantAnalysis(),
@@ -101,6 +100,48 @@ if "skipped" not in cross:
 if not report["passed"]:
     st.stop()
 
+@st.cache_data(show_spinner=False)
+def _run_cv(meta_X, y_arr, class_names_tuple, selected_tuple, n_folds):
+    le      = LabelEncoder().fit(list(class_names_tuple))
+    y       = y_arr
+    skf     = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
+    results = []
+    for name in selected_tuple:
+        clf  = _META_LEARNERS[name]()
+        pred = cross_val_predict(clf, meta_X, y, cv=skf, n_jobs=1)
+
+        clf_full = _META_LEARNERS[name]()
+        clf_full.fit(meta_X, y)
+        train_pred    = clf_full.predict(meta_X)
+        e_train = round(1.0 - balanced_accuracy_score(y, train_pred), 4)
+        e_test  = round(1.0 - balanced_accuracy_score(y, pred), 4)
+
+        per_class_macro = {}
+        for cls_name in le.classes_:
+            lbl = le.transform([cls_name])[0]
+            per_class_macro[cls_name] = {
+                "precision": precision_score(y, pred, labels=[lbl], average="macro", zero_division=0),
+                "recall":    recall_score(y, pred, labels=[lbl], average="macro", zero_division=0),
+                "f1":        f1_score(y, pred, labels=[lbl], average="macro", zero_division=0),
+                "support":   int((y == lbl).sum()),
+            }
+
+        results.append({
+            "name":      name,
+            "bal_acc":   balanced_accuracy_score(y, pred),
+            "acc":       accuracy_score(y, pred),
+            "prec_mac":  precision_score(y, pred, average="macro", zero_division=0),
+            "rec_mac":   recall_score(y, pred, average="macro", zero_division=0),
+            "f1_mac":    f1_score(y, pred, average="macro", zero_division=0),
+            "e_train":   e_train,
+            "e_test":    e_test,
+            "abs_gap":   round(abs(e_train - e_test), 4),
+            "pred":      pred,
+            "per_class": per_class_macro,
+        })
+    return results
+
+
 st.subheader("Step 1 — Load Meta-Feature Matrix")
 with st.spinner("Loading probability CSVs..."):
     meta_X, y_str, model_names, class_names = _load(search_dir)
@@ -119,61 +160,9 @@ if not selected:
     st.stop()
 
 st.subheader("Step 2 — Cross-Validation")
-skf        = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
-all_results = []
-progress    = st.progress(0.0)
-status_txt  = st.empty()
+with st.spinner("Running cross-validation (cached after first run)..."):
+    all_results = _run_cv(meta_X, y, tuple(class_names), tuple(selected), n_folds)
 
-for i, name in enumerate(selected):
-    status_txt.text(f"Running {name} ({i + 1}/{len(selected)})...")
-    clf  = _META_LEARNERS[name]()
-    pred = cross_val_predict(clf, meta_X, y, cv=skf, n_jobs=1)
-
-    clf_full = _META_LEARNERS[name]()
-    clf_full.fit(meta_X, y)
-    train_pred    = clf_full.predict(meta_X)
-    train_bal_acc = balanced_accuracy_score(y, train_pred)
-    e_train = round(1.0 - train_bal_acc, 4)
-    e_test  = round(1.0 - balanced_accuracy_score(y, pred), 4)
-
-    bal_acc   = balanced_accuracy_score(y, pred)
-    acc       = accuracy_score(y, pred)
-    prec_mac  = precision_score(y, pred, average="macro", zero_division=0)
-    rec_mac   = recall_score(y, pred, average="macro", zero_division=0)
-    f1_mac    = f1_score(y, pred, average="macro", zero_division=0)
-
-    per_class_macro = {}
-    for cls_name in le.classes_:
-        per_class_macro[cls_name] = {
-            "precision": precision_score(y, pred,
-                                         labels=[le.transform([cls_name])[0]],
-                                         average="macro", zero_division=0),
-            "recall":    recall_score(y, pred,
-                                      labels=[le.transform([cls_name])[0]],
-                                      average="macro", zero_division=0),
-            "f1":        f1_score(y, pred,
-                                  labels=[le.transform([cls_name])[0]],
-                                  average="macro", zero_division=0),
-            "support":   int((y == le.transform([cls_name])[0]).sum()),
-        }
-
-    all_results.append({
-        "name":       name,
-        "bal_acc":    bal_acc,
-        "acc":        acc,
-        "prec_mac":   prec_mac,
-        "rec_mac":    rec_mac,
-        "f1_mac":     f1_mac,
-        "e_train":    e_train,
-        "e_test":     e_test,
-        "abs_gap":    round(abs(e_train - e_test), 4),
-        "pred":       pred,
-        "per_class":  per_class_macro,
-    })
-    progress.progress((i + 1) / len(selected))
-
-status_txt.empty()
-progress.empty()
 
 all_results.sort(key=lambda r: r["bal_acc"], reverse=True)
 best_name = all_results[0]["name"]
