@@ -38,7 +38,7 @@ _META_LEARNERS = {
         C=1.0, class_weight="balanced", max_iter=2000, random_state=42
     ),
     "LDA": lambda: LinearDiscriminantAnalysis(),
-    "QDA": lambda: QuadraticDiscriminantAnalysis(),
+    "QDA": lambda: QuadraticDiscriminantAnalysis(reg_param=0.01),
 }
 
 
