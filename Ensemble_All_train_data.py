@@ -278,17 +278,17 @@ st.title("Stacking Ensemble — Full Training Pipeline")
 uploaded_pkl = st.sidebar.file_uploader("Upload LSWMD.pkl", type=["pkl"])
 data_path = st.sidebar.text_input("OR local path (.pkl)", value=_DEFAULT_PATH)
 test_size  = st.sidebar.slider("Test split fraction", 0.1, 0.4, 0.2, 0.05)
-use_smote  = st.sidebar.checkbox("Apply SMOTE to meta-train features", value=False)
+use_smote  = st.sidebar.checkbox("Apply SMOTE to meta-train features", value=True)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**SVM meta-learner grid**")
 svm_kernels = st.sidebar.multiselect(
     "Kernels", ["rbf", "linear", "poly", "sigmoid"],
-    default=["linear"]
+    default=["linear", "rbf", "poly", "sigmoid"]
 )
 svm_cs = st.sidebar.multiselect(
     "C values", [0.01, 0.1, 1.0, 10.0, 100.0],
-    default=[0.1, 1.0]
+    default=[0.1, 1.0, 100.0]
 )
 
 st.subheader("Step 1 — Load data and split")
