@@ -10,7 +10,7 @@ from sklearn.discriminant_analysis import (
     LinearDiscriminantAnalysis,
     QuadraticDiscriminantAnalysis,
 )
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import LinearSVC
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
 from sklearn.metrics import (
@@ -30,9 +30,6 @@ _META_LEARNERS = {
     ),
     "RF": lambda: RandomForestClassifier(
         n_estimators=100, class_weight="balanced", random_state=42, n_jobs=1
-    ),
-    "GradientBoosting": lambda: GradientBoostingClassifier(
-        n_estimators=50, random_state=42
     ),
     "SVM": lambda: LinearSVC(
         C=1.0, class_weight="balanced", max_iter=2000, random_state=42
