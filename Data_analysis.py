@@ -10,11 +10,17 @@ _WORK_DIR = os.path.dirname(os.path.abspath(__file__))
 st.set_page_config(page_title="Model Performance Analysis", layout="wide")
 st.title("Feature CSV — Iteration Performance Analysis")
 
-search_dir = st.sidebar.text_input("Feature CSV directory", value=_WORK_DIR)
-csv_paths  = sorted(glob.glob(os.path.join(search_dir, "*_features.csv")))
+# Auto-load all *_features.csv from the repo directory
+csv_paths = sorted(glob.glob(os.path.join(_WORK_DIR, "*_features.csv")))
 
-if not csv_paths:
-    st.error(f"No *_features.csv files found in: {search_dir}")
+# Optional: allow uploading additional CSVs
+uploaded_csvs = st.sidebar.file_uploader(
+    "Upload additional *_features.csv files (optional)",
+    type=["csv"], accept_multiple_files=True
+)
+
+if not csv_paths and not uploaded_csvs:
+    st.error("No *_features.csv files found in the repo directory and none uploaded.")
     st.stop()
 
 
@@ -28,7 +34,7 @@ def _load(path):
     metric_start = df.columns.get_loc("balanced_acc") if "balanced_acc" in df.columns else 0
     hp_cols = list(df.columns[:metric_start])
     df["_iter"]  = df.index
-    df["_label"] = df[hp_cols].astype(str).agg(" | ".join, axis=1) if hp_cols else df.index.astype(str)
+    df["_label"] = df[hp_cols].fillna("—").astype(str).agg(" | ".join, axis=1) if hp_cols else df.index.astype(str)
     return df, hp_cols
 
 
@@ -41,6 +47,16 @@ for path in csv_paths:
         hp_cols_all[name] = hc
     except Exception as e:
         st.warning(f"Could not load {os.path.basename(path)}: {e}")
+
+for uf in (uploaded_csvs or []):
+    name = _label(uf.name)
+    try:
+        import io
+        df, hc = _load(io.StringIO(uf.read().decode("utf-8")))
+        dfs_all[name]     = df
+        hp_cols_all[name] = hc
+    except Exception as e:
+        st.warning(f"Could not load uploaded {uf.name}: {e}")
 
 if not dfs_all:
     st.stop()
